@@ -198,8 +198,8 @@ module de1_soc(
     wire [  4:0 ] regAddr   =  SW [4:0];
     wire [ 31:0 ] regData;
 
-    //cores
-    sm_top sm_top
+    //top module
+    lab_top lab_top
     (
         .clkIn      ( clkIn     ),
         .rst_n      ( rst_n     ),
