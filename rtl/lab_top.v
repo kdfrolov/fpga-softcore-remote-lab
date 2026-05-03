@@ -11,7 +11,11 @@ module lab_top
     input           clkEnable,
     output          clk,
     input   [ 4:0 ] regAddr,
-    output  [31:0 ] regData
+    output  [31:0 ] regData,
+
+    //UART pins
+    input           uart_rxd_i,
+    output          uart_txd_o
 );
     //metastability input filters
     wire    [ 3:0 ] divide;
@@ -89,22 +93,22 @@ module lab_top
     // ============================================================
     // ROM backend for I-cache
     // ============================================================
-    lab_icache_rom_backend #(
-        .HEX_FILE  ("program.hex"),
-        .ADDR_W    (24),
-        .DATA_W    (32),
-        .ROM_WORDS (4096)
-    ) u_icache_backend (
-        .clk       ( clk         ),
-        .rst_n     ( rst_n       ),
-        .valid_i   ( ic_be_valid ),
-        .addr_i    ( ic_be_addr  ),
-        .wdata_i   ( ic_be_wdata ),
-        .wstrb_i   ( ic_be_wstrb ),
-        .ready_o   ( ic_be_ready ),
-        .rvalid_o  ( ic_be_rvalid),
-        .rdata_o   ( ic_be_rdata )
-    );
+    // lab_icache_rom_backend #(
+    //     .HEX_FILE  ("program.hex"),
+    //     .ADDR_W    (24),
+    //     .DATA_W    (32),
+    //     .ROM_WORDS (4096)
+    // ) u_icache_backend (
+    //     .clk       ( clk         ),
+    //     .rst_n     ( rst_n       ),
+    //     .valid_i   ( ic_be_valid ),
+    //     .addr_i    ( ic_be_addr  ),
+    //     .wdata_i   ( ic_be_wdata ),
+    //     .wstrb_i   ( ic_be_wstrb ),
+    //     .ready_o   ( ic_be_ready ),
+    //     .rvalid_o  ( ic_be_rvalid),
+    //     .rdata_o   ( ic_be_rdata )
+    // );
 
     // ============================================================
     // CPU <-> D-cache
@@ -135,22 +139,22 @@ module lab_top
     // ============================================================
     // RAM backend for D-cache
     // ============================================================
-    lab_dcache_ram_backend #(
-        .HEX_FILE  (""),
-        .ADDR_W    (24),
-        .DATA_W    (32),
-        .RAM_WORDS (4096)
-    ) u_dcache_backend (
-        .clk       ( clk         ),
-        .rst_n     ( rst_n       ),
-        .valid_i   ( dc_be_valid ),
-        .addr_i    ( dc_be_addr  ),
-        .wdata_i   ( dc_be_wdata ),
-        .wstrb_i   ( dc_be_wstrb ),
-        .ready_o   ( dc_be_ready ),
-        .rvalid_o  ( dc_be_rvalid),
-        .rdata_o   ( dc_be_rdata )
-    );
+    // lab_dcache_ram_backend #(
+    //     .HEX_FILE  (""),
+    //     .ADDR_W    (24),
+    //     .DATA_W    (32),
+    //     .RAM_WORDS (4096)
+    // ) u_dcache_backend (
+    //     .clk       ( clk         ),
+    //     .rst_n     ( rst_n       ),
+    //     .valid_i   ( dc_be_valid ),
+    //     .addr_i    ( dc_be_addr  ),
+    //     .wdata_i   ( dc_be_wdata ),
+    //     .wstrb_i   ( dc_be_wstrb ),
+    //     .ready_o   ( dc_be_ready ),
+    //     .rvalid_o  ( dc_be_rvalid),
+    //     .rdata_o   ( dc_be_rdata )
+    // );
 
     // ============================================================
     // Data cache
@@ -180,6 +184,49 @@ module lab_top
         .be_iob_rvalid_i ( dc_be_rvalid    ),
         .be_iob_rdata_i  ( dc_be_rdata     ),
         .be_iob_ready_i  ( dc_be_ready     )
+    );
+
+    // ============================================================
+    // UART memory agent
+    // uart_clk = clkIn   (stable 50 MHz domain)
+    // core_clk = clk     (variable divided core domain)
+    // ============================================================
+    wire [2:0] dbg_uart_state;
+    wire [3:0] dbg_rx_state;
+    wire       dbg_core_busy;
+
+    uart_mem_agent_2clk #(
+        .UART_CLK_HZ       (50000000),
+        .UART_BAUD         (115200),
+        .UART_TIMEOUT_CLKS (5000000)
+    ) u_uart_mem_agent (
+        .rst_n             ( rst_n         ),
+
+        .uart_clk          ( clkIn         ),
+        .uart_txd_o        ( uart_txd_o    ),
+        .uart_rxd_i        ( uart_rxd_i    ),
+
+        .core_clk          ( clk           ),
+
+        // I-cache backend interface
+        .ic_valid_i        ( ic_be_valid   ),
+        .ic_addr_i         ( {8'b0, ic_be_addr} ),
+        .ic_ready_o        ( ic_be_ready   ),
+        .ic_rvalid_o       ( ic_be_rvalid  ),
+        .ic_rdata_o        ( ic_be_rdata   ),
+
+        // D-cache backend interface
+        .dc_valid_i        ( dc_be_valid   ),
+        .dc_addr_i         ( {8'b0, dc_be_addr} ),
+        .dc_wdata_i        ( dc_be_wdata   ),
+        .dc_wstrb_i        ( dc_be_wstrb   ),
+        .dc_ready_o        ( dc_be_ready   ),
+        .dc_rvalid_o       ( dc_be_rvalid  ),
+        .dc_rdata_o        ( dc_be_rdata   ),
+
+        .dbg_uart_state_o  ( dbg_uart_state ),
+        .dbg_rx_state_o    ( dbg_rx_state   ),
+        .dbg_core_busy_o   ( dbg_core_busy  )
     );
 
     // ============================================================
