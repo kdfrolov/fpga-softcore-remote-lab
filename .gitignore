@@ -1,3 +1,4 @@
 venv/
 __pycache__/
 .pytest_cache
+schoolriscv_pc_host.egg-info/
