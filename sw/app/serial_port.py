@@ -13,7 +13,7 @@ class SerialByteStream:
         self,
         port: str,
         baud: int = 115200,
-        timeout: float = 5.0,
+        timeout: float = 120.0,
     ) -> None:
         self._ser = serial.Serial(
             port=port,
