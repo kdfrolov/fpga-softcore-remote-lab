@@ -1,10 +1,5 @@
 """
 MemoryModel — byte-addressable little-endian 32-bit memory.
-
-Mirrors the Verilog testbench pc_mem[] behaviour:
-- word-aligned 32-bit reads/writes
-- byte-granular writes via WSTRB mask (bit i → byte i of the word)
-- out-of-range → raises MemoryRangeError (caller maps to BAD_ADDR status)
 """
 
 from __future__ import annotations
@@ -17,6 +12,10 @@ class MemoryError(Exception):
 
 
 class MemoryRangeError(MemoryError):
+    pass
+
+
+class MemoryAlignmentError(MemoryError):
     pass
 
 
@@ -40,6 +39,12 @@ class MemoryModel:
                 f"[0x00000000, 0x{self.size_bytes - 1:08X}]"
             )
 
+    def _check_alignment(self, addr: int, align: int) -> None:
+        if addr % align != 0:
+            raise MemoryAlignmentError(
+                f"Address 0x{addr:08X} is not aligned to {align} bytes"
+            )
+
     def read_bytes(self, addr: int, count: int) -> bytes:
         self._check(addr, count)
         return bytes(self._mem[addr:addr + count])
@@ -48,23 +53,65 @@ class MemoryModel:
         self._check(addr, len(data))
         self._mem[addr:addr + len(data)] = data
 
+    def read_u8(self, addr: int) -> int:
+        self._check(addr, 1)
+        return self._mem[addr]
+
+    def read_u16(self, addr: int) -> int:
+        self._check(addr, 2)
+        self._check_alignment(addr, 2)
+        return int.from_bytes(self._mem[addr:addr + 2], byteorder="little")
+
     def read_u32(self, addr: int) -> int:
         self._check(addr, 4)
         return int.from_bytes(self._mem[addr:addr + 4], byteorder="little")
 
+    def write_u8(self, addr: int, value: int) -> None:
+        self._check(addr, 1)
+        self._mem[addr] = value & 0xFF
+
+    def write_u16(self, addr: int, value: int) -> None:
+        self._check(addr, 2)
+        self._check_alignment(addr, 2)
+        self._mem[addr:addr + 2] = (value & 0xFFFF).to_bytes(2, byteorder="little")
+
     def write_u32(self, addr: int, value: int, wstrb: int = 0xF) -> None:
-        """Write up to 4 bytes of value to addr, gated by wstrb bitmask."""
         self._check(addr, 4)
         raw = (value & 0xFFFF_FFFF).to_bytes(4, byteorder="little")
         for i in range(4):
             if (wstrb >> i) & 1:
                 self._mem[addr + i] = raw[i]
 
+    def read_typed(self, addr: int, mode: str) -> int:
+        mode = mode.lower()
+        if mode == "word":
+            self._check_alignment(addr, 4)
+            return self.read_u32(addr)
+        if mode == "half":
+            return self.read_u16(addr)
+        if mode == "byte":
+            return self.read_u8(addr)
+        raise ValueError(f"Unsupported read mode: {mode}")
+
+    def write_typed(self, addr: int, value: int, mode: str) -> None:
+        mode = mode.lower()
+        if mode == "word":
+            self._check_alignment(addr, 4)
+            self.write_u32(addr, value, 0xF)
+            return
+        if mode == "half":
+            self.write_u16(addr, value)
+            return
+        if mode == "byte":
+            self.write_u8(addr, value)
+            return
+        raise ValueError(f"Unsupported write mode: {mode}")
+
     def load_hex_words(self, path: str | Path, base_addr: int = 0) -> int:
-        """Load a plain hex file (one 32-bit word per line, no addresses)."""
         path = Path(path)
         addr = base_addr
         count = 0
+
         with path.open("r", encoding="utf-8") as f:
             for line in f:
                 s = line.strip()
@@ -74,6 +121,7 @@ class MemoryModel:
                 self.write_u32(addr, word, 0xF)
                 addr += 4
                 count += 1
+
         return count
 
     def dump_words(self, addr: int, count: int) -> list[int]:
@@ -83,5 +131,5 @@ class MemoryModel:
         words = self.dump_words(addr, count)
         lines = []
         for i, w in enumerate(words):
-            lines.append(f"  0x{addr + i*4:08X}: 0x{w:08X}")
+            lines.append(f"0x{addr + i*4:08X}: 0x{w:08X}")
         return "\n".join(lines)

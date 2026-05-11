@@ -1,21 +1,12 @@
 """
 UartMemoryAgent — services FPGA UART memory requests using MemoryModel.
-
-Flow:
-  1. FPGA sends IREAD_REQ / DREAD_REQ / WRITE_REQ frame
-  2. Agent parses request, reads/writes MemoryModel
-  3. Agent sends IREAD_RESP / DREAD_RESP / WRITE_RESP frame back
-
-The ByteStream protocol requires only two methods:
-  read_byte() -> int
-  write_bytes(bytes) -> None
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, Optional, Protocol
 
 from .memory_model import MemoryModel, MemoryRangeError
 from .protocol import (
@@ -58,10 +49,10 @@ class AgentStats:
 
     def __str__(self) -> str:
         return (
-            f"uptime={self.uptime():.1f}s  "
-            f"rx={self.frames_rx}  tx={self.frames_tx}  "
-            f"iread={self.iread_count}  dread={self.dread_count}  "
-            f"write={self.write_count}  "
+            f"uptime={self.uptime():.1f}s "
+            f"rx={self.frames_rx} tx={self.frames_tx} "
+            f"iread={self.iread_count} dread={self.dread_count} "
+            f"write={self.write_count} "
             f"err(xor={self.bad_xor} type={self.bad_type} "
             f"len={self.bad_len} addr={self.bad_addr})"
         )
@@ -73,19 +64,23 @@ class UartMemoryAgent:
         memory: MemoryModel,
         stream: ByteStream,
         verbose: bool = True,
+        logger: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.memory = memory
         self.stream = stream
         self.verbose = verbose
+        self.logger = logger
         self.stats = AgentStats()
         self._running = False
 
     def _log(self, msg: str) -> None:
-        if self.verbose:
+        if self.logger is not None:
+            self.logger(msg)
+        elif self.verbose:
             print(f"[agent] {msg}")
 
     def _log_frame(self, direction: str, frame: Frame) -> None:
-        if not self.verbose:
+        if not self.verbose and self.logger is None:
             return
         try:
             ptype_name = PacketType(frame.packet_type).name
@@ -108,16 +103,18 @@ class UartMemoryAgent:
             self.stats.frames_rx += 1
             self._log_frame("RX", frame)
             return frame
-        except BadXorError as e:
+        except TimeoutError:
+            return None
+        except BadXorError as exc:
             self.stats.bad_xor += 1
-            self._log(f"ERROR {e}")
+            self._log(f"ERROR {exc}")
             return None
-        except BadSofError as e:
-            self._log(f"WARN  {e}")
+        except BadSofError as exc:
+            self._log(f"WARN {exc}")
             return None
-        except BadLengthError as e:
+        except BadLengthError as exc:
             self.stats.bad_len += 1
-            self._log(f"ERROR {e}")
+            self._log(f"ERROR {exc}")
             return None
 
     def handle_frame(self, frame: Frame) -> Frame:
@@ -150,7 +147,7 @@ class UartMemoryAgent:
 
             self._log(
                 f"{label} addr=0x{addr:08X} tag=0x{tag:02X} "
-                f"→ data=0x{data:08X} status={StatusCode(status).name}"
+                f"-> data=0x{data:08X} status={StatusCode(status).name}"
             )
             return build_read_response(ptype, frame.seq, int(status), tag, data)
 
@@ -175,7 +172,7 @@ class UartMemoryAgent:
             self._log(
                 f"WRITE addr=0x{addr:08X} wstrb=0b{wstrb:04b} "
                 f"data=0x{data:08X} tag=0x{tag:02X} "
-                f"→ status={StatusCode(status).name}"
+                f"-> status={StatusCode(status).name}"
             )
             return build_write_response(frame.seq, int(status), tag)
 
@@ -185,7 +182,7 @@ class UartMemoryAgent:
 
     def serve_forever(self) -> None:
         self._running = True
-        self._log(f"Started — memory size {len(self.memory)} bytes")
+        self._log(f"Started - memory size {len(self.memory)} bytes")
         try:
             while self._running:
                 frame = self._recv()
