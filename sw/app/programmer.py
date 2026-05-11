@@ -1,6 +1,4 @@
-"""
-Quartus CLI wrapper for FPGA programming from the desktop application.
-"""
+"""Quartus CLI wrapper for FPGA programming from the desktop application."""
 
 from __future__ import annotations
 
@@ -27,11 +25,9 @@ class QuartusProgrammer:
     def _candidate_paths(self, tool_name: str) -> list[str]:
         names = [tool_name, f"{tool_name}.exe"]
         paths: list[str] = []
-
         if self.quartus_bin_dir:
             for name in names:
                 paths.append(str(self.quartus_bin_dir / name))
-
         paths.extend(names)
         return paths
 
@@ -42,17 +38,10 @@ class QuartusProgrammer:
             found = shutil.which(candidate)
             if found:
                 return found
-        raise FileNotFoundError(
-            f"Cannot find {tool_name}. Set Quartus bin directory or add it to PATH."
-        )
+        raise FileNotFoundError(f"Cannot find {tool_name}. Set Quartus bin directory or add it to PATH.")
 
     def _run(self, command: list[str]) -> CommandResult:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            shell=False,
-        )
+        completed = subprocess.run(command, capture_output=True, text=True, shell=False)
         return CommandResult(
             ok=completed.returncode == 0,
             command=command,
@@ -79,5 +68,4 @@ class QuartusProgrammer:
         if hardware_name:
             command += ["-c", hardware_name]
         command += ["-o", f"p;{sof}@{device_index}"]
-
         return self._run(command)

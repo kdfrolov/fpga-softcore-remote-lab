@@ -1,6 +1,4 @@
-"""
-MemoryModel — byte-addressable little-endian 32-bit memory.
-"""
+"""Byte-addressable little-endian 32-bit memory model."""
 
 from __future__ import annotations
 
@@ -41,9 +39,7 @@ class MemoryModel:
 
     def _check_alignment(self, addr: int, align: int) -> None:
         if addr % align != 0:
-            raise MemoryAlignmentError(
-                f"Address 0x{addr:08X} is not aligned to {align} bytes"
-            )
+            raise MemoryAlignmentError(f"Address 0x{addr:08X} is not aligned to {align} bytes")
 
     def read_bytes(self, addr: int, count: int) -> bytes:
         self._check(addr, count)
@@ -64,6 +60,7 @@ class MemoryModel:
 
     def read_u32(self, addr: int) -> int:
         self._check(addr, 4)
+        self._check_alignment(addr, 4)
         return int.from_bytes(self._mem[addr:addr + 4], byteorder="little")
 
     def write_u8(self, addr: int, value: int) -> None:
@@ -77,6 +74,7 @@ class MemoryModel:
 
     def write_u32(self, addr: int, value: int, wstrb: int = 0xF) -> None:
         self._check(addr, 4)
+        self._check_alignment(addr, 4)
         raw = (value & 0xFFFF_FFFF).to_bytes(4, byteorder="little")
         for i in range(4):
             if (wstrb >> i) & 1:
@@ -85,7 +83,6 @@ class MemoryModel:
     def read_typed(self, addr: int, mode: str) -> int:
         mode = mode.lower()
         if mode == "word":
-            self._check_alignment(addr, 4)
             return self.read_u32(addr)
         if mode == "half":
             return self.read_u16(addr)
@@ -96,7 +93,6 @@ class MemoryModel:
     def write_typed(self, addr: int, value: int, mode: str) -> None:
         mode = mode.lower()
         if mode == "word":
-            self._check_alignment(addr, 4)
             self.write_u32(addr, value, 0xF)
             return
         if mode == "half":
@@ -111,7 +107,6 @@ class MemoryModel:
         path = Path(path)
         addr = base_addr
         count = 0
-
         with path.open("r", encoding="utf-8") as f:
             for line in f:
                 s = line.strip()
@@ -121,7 +116,6 @@ class MemoryModel:
                 self.write_u32(addr, word, 0xF)
                 addr += 4
                 count += 1
-
         return count
 
     def dump_words(self, addr: int, count: int) -> list[int]:
@@ -130,6 +124,6 @@ class MemoryModel:
     def dump_hex(self, addr: int, count: int) -> str:
         words = self.dump_words(addr, count)
         lines = []
-        for i, w in enumerate(words):
-            lines.append(f"0x{addr + i*4:08X}: 0x{w:08X}")
+        for i, word in enumerate(words):
+            lines.append(f"0x{addr + i*4:08X}: 0x{word:08X}")
         return "\n".join(lines)

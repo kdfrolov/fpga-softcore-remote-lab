@@ -7,33 +7,46 @@ module lab_top
 (
     input           clkIn,
     input           rst_n,
-    input   [ 3:0 ] clkDivide,
-    input           clkEnable,
     output          clk,
-    input   [ 4:0 ] regAddr,
-    output  [31:0 ] regData,
+    output  [31:0]  regData,
 
-    //UART pins
+    // UART pins
     input           uart_rxd_i,
     output          uart_txd_o
 );
-    //metastability input filters
-    wire    [ 3:0 ] divide;
-    wire            enable;
-    wire    [ 4:0 ] addr;
+    // ============================================================
+    // UART-controlled core config
+    // ============================================================
+    wire [3:0] uart_clk_div;
+    wire       uart_hold;
+    wire       uart_core_reset_pulse;
+    wire [4:0] uart_reg_addr;
 
-    sm_debouncer #(.SIZE(4)) f0(clkIn, clkDivide, divide);
-    sm_debouncer #(.SIZE(1)) f1(clkIn, clkEnable, enable);
-    sm_debouncer #(.SIZE(5)) f2(clkIn, regAddr,   addr  );
+    // core-local reset stretcher
+    reg [3:0] core_reset_cnt;
+    wire      core_rst_n = rst_n & (core_reset_cnt == 4'd0);
+    wire      core_rst = ~core_rst_n;
 
-    //clock divider
+    always @(posedge clkIn or negedge rst_n) begin
+        if (!rst_n)
+            core_reset_cnt <= 4'd0;
+        else if (uart_core_reset_pulse)
+            core_reset_cnt <= 4'd8;
+        else if (core_reset_cnt != 4'd0)
+            core_reset_cnt <= core_reset_cnt - 1'b1;
+    end
+
+    // ============================================================
+    // Clock divider
+    // We keep clock running all the time; run/stop is done via hold.
+    // ============================================================
     sm_clk_divider sm_clk_divider
     (
-        .clkIn      ( clkIn     ),
-        .rst_n      ( rst_n     ),
-        .divide     ( divide    ),
-        .enable     ( enable    ),
-        .clkOut     ( clk       )
+        .clkIn      ( clkIn        ),
+        .rst_n      ( rst_n        ),
+        .divide     ( uart_clk_div ),
+        .enable     ( 1'b1         ),
+        .clkOut     ( clk          )
     );
 
     // ============================================================
@@ -46,7 +59,7 @@ module lab_top
     wire [31:0] imData;
 
     // ============================================================
-    // I-cache back-end stub
+    // I-cache back-end
     // ============================================================
     wire        ic_be_valid;
     wire [23:0] ic_be_addr;
@@ -56,17 +69,13 @@ module lab_top
     wire        ic_be_rvalid;
     wire [31:0] ic_be_rdata;
 
-    // assign ic_be_ready  = 1'b0;
-    // assign ic_be_rvalid = 1'b0;
-    // assign ic_be_rdata  = 32'b0;
-
     // ============================================================
     // Instruction cache
     // ============================================================
     iob_cache_iob u_icache (
         .clk_i           ( clk             ),
         .cke_i           ( 1'b1            ),
-        .arst_i          ( ~rst_n          ),
+        .arst_i          ( core_rst        ),
 
         .iob_valid_i     ( imValid         ),
         .iob_addr_i      ( imAddr[23:0]    ),
@@ -91,26 +100,6 @@ module lab_top
     );
 
     // ============================================================
-    // ROM backend for I-cache
-    // ============================================================
-    // lab_icache_rom_backend #(
-    //     .HEX_FILE  ("program.hex"),
-    //     .ADDR_W    (24),
-    //     .DATA_W    (32),
-    //     .ROM_WORDS (4096)
-    // ) u_icache_backend (
-    //     .clk       ( clk         ),
-    //     .rst_n     ( rst_n       ),
-    //     .valid_i   ( ic_be_valid ),
-    //     .addr_i    ( ic_be_addr  ),
-    //     .wdata_i   ( ic_be_wdata ),
-    //     .wstrb_i   ( ic_be_wstrb ),
-    //     .ready_o   ( ic_be_ready ),
-    //     .rvalid_o  ( ic_be_rvalid),
-    //     .rdata_o   ( ic_be_rdata )
-    // );
-
-    // ============================================================
     // CPU <-> D-cache
     // ============================================================
     wire [31:0] dmAddr;
@@ -122,7 +111,7 @@ module lab_top
     wire [31:0] dmDataR;
 
     // ============================================================
-    // D-cache back-end stub
+    // D-cache back-end
     // ============================================================
     wire        dc_be_valid;
     wire [23:0] dc_be_addr;
@@ -132,37 +121,13 @@ module lab_top
     wire        dc_be_rvalid;
     wire [31:0] dc_be_rdata;
 
-    // assign dc_be_ready  = 1'b0;
-    // assign dc_be_rvalid = 1'b0;
-    // assign dc_be_rdata  = 32'b0;
-
-    // ============================================================
-    // RAM backend for D-cache
-    // ============================================================
-    // lab_dcache_ram_backend #(
-    //     .HEX_FILE  (""),
-    //     .ADDR_W    (24),
-    //     .DATA_W    (32),
-    //     .RAM_WORDS (4096)
-    // ) u_dcache_backend (
-    //     .clk       ( clk         ),
-    //     .rst_n     ( rst_n       ),
-    //     .valid_i   ( dc_be_valid ),
-    //     .addr_i    ( dc_be_addr  ),
-    //     .wdata_i   ( dc_be_wdata ),
-    //     .wstrb_i   ( dc_be_wstrb ),
-    //     .ready_o   ( dc_be_ready ),
-    //     .rvalid_o  ( dc_be_rvalid),
-    //     .rdata_o   ( dc_be_rdata )
-    // );
-
     // ============================================================
     // Data cache
     // ============================================================
     iob_cache_iob u_dcache (
         .clk_i           ( clk             ),
         .cke_i           ( 1'b1            ),
-        .arst_i          ( ~rst_n          ),
+        .arst_i          ( core_rst        ),
 
         .iob_valid_i     ( dmValid         ),
         .iob_addr_i      ( dmAddr[23:0]    ),
@@ -187,9 +152,7 @@ module lab_top
     );
 
     // ============================================================
-    // UART memory agent
-    // uart_clk = clkIn   (stable 50 MHz domain)
-    // core_clk = clk     (variable divided core domain)
+    // UART memory + control agent
     // ============================================================
     wire [2:0] dbg_uart_state;
     wire [3:0] dbg_rx_state;
@@ -200,57 +163,61 @@ module lab_top
         .UART_BAUD         (115200),
         .UART_TIMEOUT_CLKS (5000000)
     ) u_uart_mem_agent (
-        .rst_n             ( rst_n         ),
+        .rst_n                 ( rst_n              ),
 
-        .uart_clk          ( clkIn         ),
-        .uart_txd_o        ( uart_txd_o    ),
-        .uart_rxd_i        ( uart_rxd_i    ),
+        .uart_clk              ( clkIn              ),
+        .uart_txd_o            ( uart_txd_o         ),
+        .uart_rxd_i            ( uart_rxd_i         ),
 
-        .core_clk          ( clk           ),
+        .core_clk              ( clk                ),
 
-        // I-cache backend interface
-        .ic_valid_i        ( ic_be_valid   ),
-        .ic_addr_i         ( {8'b0, ic_be_addr} ),
-        .ic_ready_o        ( ic_be_ready   ),
-        .ic_rvalid_o       ( ic_be_rvalid  ),
-        .ic_rdata_o        ( ic_be_rdata   ),
+        .ic_valid_i            ( ic_be_valid        ),
+        .ic_addr_i             ( {8'b0, ic_be_addr} ),
+        .ic_ready_o            ( ic_be_ready        ),
+        .ic_rvalid_o           ( ic_be_rvalid       ),
+        .ic_rdata_o            ( ic_be_rdata        ),
 
-        // D-cache backend interface
-        .dc_valid_i        ( dc_be_valid   ),
-        .dc_addr_i         ( {8'b0, dc_be_addr} ),
-        .dc_wdata_i        ( dc_be_wdata   ),
-        .dc_wstrb_i        ( dc_be_wstrb   ),
-        .dc_ready_o        ( dc_be_ready   ),
-        .dc_rvalid_o       ( dc_be_rvalid  ),
-        .dc_rdata_o        ( dc_be_rdata   ),
+        .dc_valid_i            ( dc_be_valid        ),
+        .dc_addr_i             ( {8'b0, dc_be_addr} ),
+        .dc_wdata_i            ( dc_be_wdata        ),
+        .dc_wstrb_i            ( dc_be_wstrb        ),
+        .dc_ready_o            ( dc_be_ready        ),
+        .dc_rvalid_o           ( dc_be_rvalid       ),
+        .dc_rdata_o            ( dc_be_rdata        ),
 
-        .dbg_uart_state_o  ( dbg_uart_state ),
-        .dbg_rx_state_o    ( dbg_rx_state   ),
-        .dbg_core_busy_o   ( dbg_core_busy  )
+        .ctrl_clk_div_o        ( uart_clk_div       ),
+        .ctrl_hold_o           ( uart_hold          ),
+        .ctrl_core_reset_pulse_o ( uart_core_reset_pulse ),
+        .ctrl_reg_addr_o       ( uart_reg_addr      ),
+
+        .dbg_uart_state_o      ( dbg_uart_state     ),
+        .dbg_rx_state_o        ( dbg_rx_state       ),
+        .dbg_core_busy_o       ( dbg_core_busy      )
     );
 
     // ============================================================
     // CPU
     // ============================================================
     sr_cpu sm_cpu (
-        .clk        ( clk        ),
-        .rst_n      ( rst_n      ),
-        .regAddr    ( addr       ),
-        .regData    ( regData    ),
+        .clk        ( clk            ),
+        .rst_n      ( core_rst_n     ),
+        .hold_ext_i ( uart_hold      ),
+        .regAddr    ( uart_reg_addr  ),
+        .regData    ( regData        ),
 
-        .imAddr     ( imAddr     ),
-        .imValid    ( imValid    ),
-        .imReady    ( imReady    ),
-        .imRvalid   ( imRvalid   ),
-        .imData     ( imData     ),
+        .imAddr     ( imAddr         ),
+        .imValid    ( imValid        ),
+        .imReady    ( imReady        ),
+        .imRvalid   ( imRvalid       ),
+        .imData     ( imData         ),
 
-        .dmAddr     ( dmAddr     ),
-        .dmDataW    ( dmDataW    ),
-        .dmWstrb    ( dmWstrb    ),
-        .dmValid    ( dmValid    ),
-        .dmReady    ( dmReady    ),
-        .dmRvalid   ( dmRvalid   ),
-        .dmDataR    ( dmDataR    )
+        .dmAddr     ( dmAddr         ),
+        .dmDataW    ( dmDataW        ),
+        .dmWstrb    ( dmWstrb        ),
+        .dmValid    ( dmValid        ),
+        .dmReady    ( dmReady        ),
+        .dmRvalid   ( dmRvalid       ),
+        .dmDataR    ( dmDataR        )
     );
 
 endmodule

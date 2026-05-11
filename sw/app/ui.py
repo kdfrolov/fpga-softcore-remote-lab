@@ -7,10 +7,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from .agent import UartMemoryAgent
-from .memory_model import MemoryAlignmentError, MemoryModel, MemoryRangeError
+from .agent import ControlResult, UartMemoryAgent
+from .memory_model import MemoryModel
 from .programmer import QuartusProgrammer
 from .serial_port import SerialByteStream, list_serial_ports
+
 
 
 def parse_int(value: str) -> int:
@@ -32,7 +33,6 @@ class AgentWorker:
     def start(self, port: str, baud: int) -> None:
         if self.thread and self.thread.is_alive():
             raise RuntimeError("Agent is already running")
-
         self.stream = SerialByteStream(port=port, baud=baud, timeout=0.2)
         self.agent = UartMemoryAgent(
             memory=self.memory,
@@ -60,13 +60,30 @@ class AgentWorker:
     def running(self) -> bool:
         return bool(self.thread and self.thread.is_alive())
 
+    def _require_agent(self) -> UartMemoryAgent:
+        if not self.running() or self.agent is None:
+            raise RuntimeError("Start UART agent first")
+        return self.agent
+
+    def set_clk_div(self, div: int) -> ControlResult:
+        return self._require_agent().set_clk_div(div)
+
+    def set_hold(self, hold: bool) -> ControlResult:
+        return self._require_agent().set_hold(hold)
+
+    def core_reset(self) -> ControlResult:
+        return self._require_agent().core_reset()
+
+    def set_regsel(self, regsel: int) -> ControlResult:
+        return self._require_agent().set_regsel(regsel)
+
 
 class App(tk.Tk):
     def __init__(self, default_mem_size: int = 4096 * 4, default_baud: int = 115200, default_hex: str | None = None) -> None:
         super().__init__()
         self.title("FPGA PC Memory Agent")
-        self.geometry("1120x760")
-        self.minsize(980, 680)
+        self.geometry("1160x820")
+        self.minsize(1020, 720)
 
         self.memory = MemoryModel(size_bytes=default_mem_size)
         self.log_queue: queue.Queue[str] = queue.Queue()
@@ -74,7 +91,6 @@ class App(tk.Tk):
 
         self.port_var = tk.StringVar()
         self.baud_var = tk.StringVar(value=str(default_baud))
-        self.mem_size_var = tk.StringVar(value=str(default_mem_size))
 
         self.quartus_bin_var = tk.StringVar()
         self.jtag_hw_var = tk.StringVar()
@@ -88,6 +104,11 @@ class App(tk.Tk):
         self.value_var = tk.StringVar(value="0x00000000")
         self.mode_var = tk.StringVar(value="word")
         self.read_value_var = tk.StringVar(value="-")
+
+        self.clkdiv_var = tk.StringVar(value="0")
+        self.hold_var = tk.BooleanVar(value=True)
+        self.regsel_var = tk.StringVar(value="0")
+        self.ctrl_status_var = tk.StringVar(value="No control command sent")
 
         self._build()
         self.refresh_ports()
@@ -110,6 +131,7 @@ class App(tk.Tk):
 
     def _build(self) -> None:
         self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
         self.rowconfigure(2, weight=1)
 
         top = ttk.LabelFrame(self, text="UART agent")
@@ -134,32 +156,34 @@ class App(tk.Tk):
 
         notebook = ttk.Notebook(self)
         notebook.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        self.rowconfigure(1, weight=1)
 
         fpga_tab = ttk.Frame(notebook)
         prog_tab = ttk.Frame(notebook)
         mem_tab = ttk.Frame(notebook)
+        ctrl_tab = ttk.Frame(notebook)
 
         notebook.add(fpga_tab, text="FPGA")
         notebook.add(prog_tab, text="Program")
         notebook.add(mem_tab, text="PC Memory")
+        notebook.add(ctrl_tab, text="Core control")
 
         self._build_fpga_tab(fpga_tab)
         self._build_program_tab(prog_tab)
         self._build_memory_tab(mem_tab)
+        self._build_control_tab(ctrl_tab)
 
         log_frame = ttk.LabelFrame(self, text="Log")
         log_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
 
-        self.log_text = tk.Text(log_frame, height=12, state="disabled")
+        self.log_text = tk.Text(log_frame, height=14, state="disabled")
         self.log_text.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=scrollbar.set)
         self.log_text.bind("<Control-c>", self.copy_selected_log)
-        self.log_text.bind("<Control-C>", self.copy_selected_log)
+        self.log_text.bind("<Command-c>", self.copy_selected_log)
 
     def _build_fpga_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
@@ -188,9 +212,7 @@ class App(tk.Tk):
         ttk.Entry(parent, textvariable=self.hex_path_var).grid(row=0, column=1, sticky="ew", padx=8, pady=8)
         ttk.Button(parent, text="Browse", command=self.choose_hex).grid(row=0, column=2, padx=8, pady=8)
 
-        ttk.Button(parent, text="Load into PC memory model", command=self.load_program_hex).grid(
-            row=1, column=1, sticky="w", padx=8, pady=8
-        )
+        ttk.Button(parent, text="Load into PC memory model", command=self.load_program_hex).grid(row=1, column=1, sticky="w", padx=8, pady=8)
         ttk.Label(parent, textvariable=self.hex_words_var).grid(row=2, column=1, sticky="w", padx=8, pady=8)
 
     def _build_memory_tab(self, parent: ttk.Frame) -> None:
@@ -200,8 +222,7 @@ class App(tk.Tk):
         ttk.Entry(parent, textvariable=self.addr_var).grid(row=0, column=1, sticky="ew", padx=8, pady=8)
 
         ttk.Label(parent, text="Mode").grid(row=1, column=0, sticky="w", padx=8, pady=8)
-        mode_combo = ttk.Combobox(parent, textvariable=self.mode_var, values=["word", "half", "byte"], state="readonly")
-        mode_combo.grid(row=1, column=1, sticky="w", padx=8, pady=8)
+        ttk.Combobox(parent, textvariable=self.mode_var, values=["word", "half", "byte"], state="readonly").grid(row=1, column=1, sticky="w", padx=8, pady=8)
 
         ttk.Label(parent, text="Write value").grid(row=2, column=0, sticky="w", padx=8, pady=8)
         ttk.Entry(parent, textvariable=self.value_var).grid(row=2, column=1, sticky="ew", padx=8, pady=8)
@@ -214,9 +235,32 @@ class App(tk.Tk):
         ttk.Label(parent, text="Read result").grid(row=4, column=0, sticky="w", padx=8, pady=8)
         ttk.Label(parent, textvariable=self.read_value_var).grid(row=4, column=1, sticky="w", padx=8, pady=8)
 
-        ttk.Button(parent, text="Dump 8 words from address", command=self.dump_memory).grid(
-            row=5, column=1, sticky="w", padx=8, pady=8
-        )
+        ttk.Button(parent, text="Dump 8 words from address", command=self.dump_memory).grid(row=5, column=1, sticky="w", padx=8, pady=8)
+
+    def _build_control_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(1, weight=1)
+
+        ttk.Label(parent, text="Clock divider (0..15)").grid(row=0, column=0, sticky="w", padx=8, pady=8)
+        ttk.Spinbox(parent, from_=0, to=15, textvariable=self.clkdiv_var, width=10).grid(row=0, column=1, sticky="w", padx=8, pady=8)
+        ttk.Button(parent, text="Apply clkdiv", command=self.apply_clkdiv).grid(row=0, column=2, padx=8, pady=8)
+
+        ttk.Label(parent, text="Core hold").grid(row=1, column=0, sticky="w", padx=8, pady=8)
+        ttk.Checkbutton(parent, text="Hold core", variable=self.hold_var).grid(row=1, column=1, sticky="w", padx=8, pady=8)
+        ttk.Button(parent, text="Apply hold", command=self.apply_hold).grid(row=1, column=2, padx=8, pady=8)
+
+        ttk.Label(parent, text="Register select").grid(row=2, column=0, sticky="w", padx=8, pady=8)
+        reg_values = ["0: PC"] + [f"{i}: x{i}" for i in range(1, 32)]
+        self.regsel_combo = ttk.Combobox(parent, textvariable=self.regsel_var, values=reg_values, state="readonly", width=18)
+        self.regsel_combo.grid(row=2, column=1, sticky="w", padx=8, pady=8)
+        self.regsel_combo.set("0: PC")
+        ttk.Button(parent, text="Apply regsel", command=self.apply_regsel).grid(row=2, column=2, padx=8, pady=8)
+
+        ttk.Label(parent, text="Core reset").grid(row=3, column=0, sticky="w", padx=8, pady=8)
+        ttk.Button(parent, text="Pulse reset", command=self.apply_core_reset).grid(row=3, column=1, sticky="w", padx=8, pady=8)
+
+        ttk.Separator(parent, orient="horizontal").grid(row=4, column=0, columnspan=3, sticky="ew", padx=8, pady=10)
+        ttk.Label(parent, text="Last control status").grid(row=5, column=0, sticky="nw", padx=8, pady=8)
+        ttk.Label(parent, textvariable=self.ctrl_status_var, wraplength=700, justify="left").grid(row=5, column=1, columnspan=2, sticky="w", padx=8, pady=8)
 
     def refresh_ports(self) -> None:
         ports = list_serial_ports()
@@ -253,18 +297,12 @@ class App(tk.Tk):
             self.quartus_bin_var.set(path)
 
     def choose_sof(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select .sof file",
-            filetypes=[("SOF files", "*.sof"), ("All files", "*.*")],
-        )
+        path = filedialog.askopenfilename(title="Select .sof file", filetypes=[("SOF files", "*.sof"), ("All files", "*.*")])
         if path:
             self.sof_path_var.set(path)
 
     def choose_hex(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select program.hex",
-            filetypes=[("HEX files", "*.hex"), ("All files", "*.*")],
-        )
+        path = filedialog.askopenfilename(title="Select program.hex", filetypes=[("HEX files", "*.hex"), ("All files", "*.*")])
         if path:
             self.hex_path_var.set(path)
 
@@ -295,17 +333,12 @@ class App(tk.Tk):
             device_index = parse_int(self.device_index_var.get())
             programmer = QuartusProgrammer(self.quartus_bin_var.get().strip() or None)
 
-            result = programmer.program_sof(
-                sof_path=sof_path,
-                hardware_name=hardware,
-                device_index=device_index,
-            )
+            result = programmer.program_sof(sof_path=sof_path, hardware_name=hardware, device_index=device_index)
             self.enqueue_log(f"[quartus] {' '.join(result.command)}")
             if result.stdout:
                 self.enqueue_log(result.stdout)
             if result.stderr:
                 self.enqueue_log(result.stderr)
-
             if not result.ok:
                 raise RuntimeError(f"quartus_pgm failed with code {result.returncode}")
 
@@ -322,7 +355,6 @@ class App(tk.Tk):
                 raise ValueError("Select program.hex")
             if not Path(path).exists():
                 raise FileNotFoundError(path)
-
             self.memory.reset()
             words = self.memory.load_hex_words(path)
             self.hex_words_var.set(f"{words} words loaded")
@@ -349,7 +381,6 @@ class App(tk.Tk):
             value = parse_int(self.value_var.get())
             mode = self.mode_var.get()
             self.memory.write_typed(addr, value, mode)
-
             width = {"word": 8, "half": 4, "byte": 2}[mode]
             self.enqueue_log(f"[ui] WRITE {mode} @ 0x{addr:08X} <- 0x{value:0{width}X}")
         except Exception as exc:
@@ -363,17 +394,69 @@ class App(tk.Tk):
             dump = self.memory.dump_hex(base, 8)
             self.enqueue_log("[ui] Memory dump:")
             for line in dump.splitlines():
-                self.enqueue_log("  " + line)
+                self.enqueue_log("    " + line)
         except Exception as exc:
             messagebox.showerror("Dump memory", str(exc))
             self.enqueue_log(f"[ui] ERROR dump: {exc}")
+
+    def _apply_control_result(self, result: ControlResult) -> None:
+        self.ctrl_status_var.set(result.message)
+        if result.ok:
+            self.enqueue_log(f"[ui] {result.message}")
+        else:
+            self.enqueue_log(f"[ui] ERROR {result.message}")
+            messagebox.showerror("Core control", result.message)
+
+    def apply_clkdiv(self) -> None:
+        try:
+            div = parse_int(self.clkdiv_var.get())
+            result = self.agent_worker.set_clk_div(div)
+            if result.ok and result.response_value is not None:
+                self.clkdiv_var.set(str(result.response_value))
+            self._apply_control_result(result)
+        except Exception as exc:
+            messagebox.showerror("Apply clkdiv", str(exc))
+            self.enqueue_log(f"[ui] ERROR apply clkdiv: {exc}")
+
+    def apply_hold(self) -> None:
+        try:
+            result = self.agent_worker.set_hold(bool(self.hold_var.get()))
+            if result.ok and result.response_value is not None:
+                self.hold_var.set(bool(result.response_value))
+            self._apply_control_result(result)
+        except Exception as exc:
+            messagebox.showerror("Apply hold", str(exc))
+            self.enqueue_log(f"[ui] ERROR apply hold: {exc}")
+
+    def apply_core_reset(self) -> None:
+        try:
+            result = self.agent_worker.core_reset()
+            if result.ok:
+                self.hold_var.set(True)
+            self._apply_control_result(result)
+        except Exception as exc:
+            messagebox.showerror("Core reset", str(exc))
+            self.enqueue_log(f"[ui] ERROR core reset: {exc}")
+
+    def apply_regsel(self) -> None:
+        try:
+            text = self.regsel_var.get().strip()
+            regsel = parse_int(text.split(":", 1)[0])
+            result = self.agent_worker.set_regsel(regsel)
+            if result.ok and result.response_value is not None:
+                val = result.response_value
+                self.regsel_var.set("0: PC" if val == 0 else f"{val}: x{val}")
+            self._apply_control_result(result)
+        except Exception as exc:
+            messagebox.showerror("Apply regsel", str(exc))
+            self.enqueue_log(f"[ui] ERROR apply regsel: {exc}")
 
     def destroy(self) -> None:
         try:
             self.agent_worker.stop()
         finally:
             super().destroy()
-            
+
     def copy_selected_log(self, event=None):
         try:
             text = self.log_text.get("sel.first", "sel.last")
@@ -383,6 +466,7 @@ class App(tk.Tk):
         self.clipboard_append(text)
         self.update()
         return "break"
+
 
 
 def launch_ui(default_mem_size: int = 4096 * 4, default_baud: int = 115200, default_hex: str | None = None) -> None:

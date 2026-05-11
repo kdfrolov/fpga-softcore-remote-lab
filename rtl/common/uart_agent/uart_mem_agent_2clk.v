@@ -36,6 +36,12 @@ module uart_mem_agent_2clk
     output reg        dc_rvalid_o,
     output reg [31:0] dc_rdata_o,
 
+    // Control outputs (uart_clk domain)
+    output reg [3:0]  ctrl_clk_div_o,
+    output reg        ctrl_hold_o,
+    output reg        ctrl_core_reset_pulse_o,
+    output reg [4:0]  ctrl_reg_addr_o,
+
     // Debug
     output [2:0]      dbg_uart_state_o,
     output [3:0]      dbg_rx_state_o,
@@ -373,6 +379,8 @@ module uart_mem_agent_2clk
     wire [7:0] rx_byte;
     wire       rx_valid;
 
+    reg txexpectresp;
+
     uart_tx #(
         .CLK_HZ (UART_CLK_HZ),
         .BAUD   (UART_BAUD)
@@ -438,7 +446,7 @@ module uart_mem_agent_2clk
     reg [7:0] rx_len;
     reg [7:0] rx_pl_idx;
     reg [7:0] rx_xor_acc;
-    reg [7:0] rx_pl [0:9];
+    reg [7:0] rx_pl [0:15];
 
     reg [7:0] expected_resp_type;
 
@@ -487,10 +495,11 @@ module uart_mem_agent_2clk
             req_seq_uart   <= 8'd0;
             seq_ctr_uart   <= 8'd0;
 
-            tx_total <= 5'd0;
-            tx_idx   <= 5'd0;
-            tx_valid <= 1'b0;
-            tx_data  <= 8'd0;
+            tx_total       <= 5'd0;
+            tx_idx         <= 5'd0;
+            tx_valid       <= 1'b0;
+            tx_data        <= 8'd0;
+            txexpectresp <= 1'b0;
 
             timeout_cnt <= 32'd0;
 
@@ -510,12 +519,21 @@ module uart_mem_agent_2clk
             txbuf[9]  <= 8'd0; txbuf[10] <= 8'd0; txbuf[11] <= 8'd0;
             txbuf[12] <= 8'd0; txbuf[13] <= 8'd0; txbuf[14] <= 8'd0;
 
-            rx_pl[0] <= 8'd0; rx_pl[1] <= 8'd0; rx_pl[2] <= 8'd0;
-            rx_pl[3] <= 8'd0; rx_pl[4] <= 8'd0; rx_pl[5] <= 8'd0;
-            rx_pl[6] <= 8'd0; rx_pl[7] <= 8'd0; rx_pl[8] <= 8'd0;
-            rx_pl[9] <= 8'd0;
+            rx_pl[0]  <= 8'd0; rx_pl[1]  <= 8'd0; rx_pl[2]  <= 8'd0;
+            rx_pl[3]  <= 8'd0; rx_pl[4]  <= 8'd0; rx_pl[5]  <= 8'd0;
+            rx_pl[6]  <= 8'd0; rx_pl[7]  <= 8'd0; rx_pl[8]  <= 8'd0;
+            rx_pl[9]  <= 8'd0; rx_pl[10] <= 8'd0; rx_pl[11] <= 8'd0;
+            rx_pl[12] <= 8'd0; rx_pl[13] <= 8'd0; rx_pl[14] <= 8'd0;
+            rx_pl[15] <= 8'd0;
+
+            ctrl_clk_div_o          <= 4'd0;
+            ctrl_hold_o             <= 1'b1;
+            ctrl_core_reset_pulse_o <= 1'b0;
+            ctrl_reg_addr_o         <= 5'd0;
+
         end else begin
             tx_valid <= 1'b0;
+            ctrl_core_reset_pulse_o <= 1'b0;
 
             req_sync1_uart <= req_toggle_core;
             req_sync2_uart <= req_sync1_uart;
@@ -523,11 +541,183 @@ module uart_mem_agent_2clk
             case (uart_state)
                 ST_IDLE: begin
                     timeout_cnt <= 32'd0;
-                    rx_state    <= RX_SOF;
-                    rx_pl_idx   <= 8'd0;
-                    rx_xor_acc  <= 8'd0;
 
-                    if (req_sync2_uart != req_seen_uart) begin
+                    // --------------------------------------------------
+                    // 1) Incoming control frames from PC while idle
+                    // --------------------------------------------------
+                    if (rx_valid) begin
+                        case (rx_state)
+                            RX_SOF: begin
+                                if (rx_byte == `UA_SOF) begin
+                                    rx_xor_acc <= 8'd0;
+                                    rx_state   <= RX_TYPE;
+                                end
+                            end
+
+                            RX_TYPE: begin
+                                rx_type    <= rx_byte;
+                                rx_xor_acc <= rx_byte;
+                                rx_state   <= RX_SEQ;
+                            end
+
+                            RX_SEQ: begin
+                                rx_seq     <= rx_byte;
+                                rx_xor_acc <= rx_xor_acc ^ rx_byte;
+                                rx_state   <= RX_LEN;
+                            end
+
+                            RX_LEN: begin
+                                rx_len     <= rx_byte;
+                                rx_xor_acc <= rx_xor_acc ^ rx_byte;
+                                rx_pl_idx  <= 8'd0;
+
+                                if (rx_byte == 8'd0)
+                                    rx_state <= RX_XOR;
+                                else if (rx_byte <= 8'd16)
+                                    rx_state <= RX_PAYLOAD;
+                                else
+                                    rx_state <= RX_SOF;
+                            end
+
+                            RX_PAYLOAD: begin
+                                rx_pl[rx_pl_idx] <= rx_byte;
+                                rx_xor_acc       <= rx_xor_acc ^ rx_byte;
+
+                                if (rx_pl_idx == rx_len - 1)
+                                    rx_state <= RX_XOR;
+                                else
+                                    rx_pl_idx <= rx_pl_idx + 1'b1;
+                            end
+
+                            RX_XOR: begin
+                                rx_state   <= RX_SOF;
+                                rx_pl_idx  <= 8'd0;
+                                rx_xor_acc <= 8'd0;
+
+                                if (rx_xor_acc == rx_byte) begin
+                                    case (rx_type)
+
+                                        // ----------------------------------
+                                        // SET CLK DIV
+                                        // payload: [div]
+                                        // resp: [status][div]
+                                        // ----------------------------------
+                                        `UA_TYPE_SET_CLKDIV_REQ: begin
+                                            txbuf[0] <= `UA_SOF;
+                                            txbuf[1] <= `UA_TYPE_SET_CLKDIV_RESP;
+                                            txbuf[2] <= rx_seq;
+                                            txbuf[3] <= `UA_PLEN_SET_CLKDIV_RESP;
+
+                                            if (rx_len == `UA_PLEN_SET_CLKDIV_REQ) begin
+                                                ctrl_clk_div_o <= rx_pl[0][3:0];
+                                                txbuf[4] <= `UA_STATUS_OK;
+                                                txbuf[5] <= {4'b0000, rx_pl[0][3:0]};
+                                            end else begin
+                                                txbuf[4] <= `UA_STATUS_BAD_LEN;
+                                                txbuf[5] <= {4'b0000, ctrl_clk_div_o};
+                                            end
+
+                                            tx_total       <= 5'd7;
+                                            tx_idx         <= 5'd0;
+                                            txexpectresp <= 1'b0;
+                                            uart_state     <= ST_BUILD_XOR;
+                                        end
+
+                                        // ----------------------------------
+                                        // SET HOLD
+                                        // payload: [hold]
+                                        // resp: [status][hold]
+                                        // ----------------------------------
+                                        `UA_TYPE_SET_HOLD_REQ: begin
+                                            txbuf[0] <= `UA_SOF;
+                                            txbuf[1] <= `UA_TYPE_SET_HOLD_RESP;
+                                            txbuf[2] <= rx_seq;
+                                            txbuf[3] <= `UA_PLEN_SET_HOLD_RESP;
+
+                                            if (rx_len == `UA_PLEN_SET_HOLD_REQ) begin
+                                                ctrl_hold_o <= rx_pl[0][0];
+                                                txbuf[4] <= `UA_STATUS_OK;
+                                                txbuf[5] <= {7'b0, rx_pl[0][0]};
+                                            end else begin
+                                                txbuf[4] <= `UA_STATUS_BAD_LEN;
+                                                txbuf[5] <= {7'b0, ctrl_hold_o};
+                                            end
+
+                                            tx_total       <= 5'd7;
+                                            tx_idx         <= 5'd0;
+                                            txexpectresp <= 1'b0;
+                                            uart_state     <= ST_BUILD_XOR;
+                                        end
+
+                                        // ----------------------------------
+                                        // CORE RESET
+                                        // payload: none
+                                        // resp: [status]
+                                        // reset also forces hold=1
+                                        // ----------------------------------
+                                        `UA_TYPE_CORE_RESET_REQ: begin
+                                            txbuf[0] <= `UA_SOF;
+                                            txbuf[1] <= `UA_TYPE_CORE_RESET_RESP;
+                                            txbuf[2] <= rx_seq;
+                                            txbuf[3] <= `UA_PLEN_CORE_RESET_RESP;
+
+                                            if (rx_len == `UA_PLEN_CORE_RESET_REQ) begin
+                                                ctrl_hold_o             <= 1'b1;
+                                                ctrl_core_reset_pulse_o <= 1'b1;
+                                                txbuf[4] <= `UA_STATUS_OK;
+                                            end else begin
+                                                txbuf[4] <= `UA_STATUS_BAD_LEN;
+                                            end
+
+                                            tx_total       <= 5'd6;
+                                            tx_idx         <= 5'd0;
+                                            txexpectresp <= 1'b0;
+                                            uart_state     <= ST_BUILD_XOR;
+                                        end
+
+                                        // ----------------------------------
+                                        // SET REGSEL
+                                        // payload: [regsel]
+                                        // resp: [status][regsel]
+                                        // 0 => PC, 1..31 => x1..x31
+                                        // ----------------------------------
+                                        `UA_TYPE_SET_REGSEL_REQ: begin
+                                            txbuf[0] <= `UA_SOF;
+                                            txbuf[1] <= `UA_TYPE_SET_REGSEL_RESP;
+                                            txbuf[2] <= rx_seq;
+                                            txbuf[3] <= `UA_PLEN_SET_REGSEL_RESP;
+
+                                            if (rx_len == `UA_PLEN_SET_REGSEL_REQ) begin
+                                                ctrl_reg_addr_o <= rx_pl[0][4:0];
+                                                txbuf[4] <= `UA_STATUS_OK;
+                                                txbuf[5] <= {3'b000, rx_pl[0][4:0]};
+                                            end else begin
+                                                txbuf[4] <= `UA_STATUS_BAD_LEN;
+                                                txbuf[5] <= {3'b000, ctrl_reg_addr_o};
+                                            end
+
+                                            tx_total       <= 5'd7;
+                                            tx_idx         <= 5'd0;
+                                            txexpectresp <= 1'b0;
+                                            uart_state     <= ST_BUILD_XOR;
+                                        end
+
+                                        default: begin
+                                            rx_state <= RX_SOF;
+                                        end
+                                    endcase
+                                end
+                            end
+
+                            default: begin
+                                rx_state <= RX_SOF;
+                            end
+                        endcase
+
+                    // --------------------------------------------------
+                    // 2) Existing memory request launch from core side
+                    // --------------------------------------------------
+                    end else if (req_sync2_uart != req_seen_uart) begin
                         req_seen_uart <= req_sync2_uart;
 
                         req_type_uart  <= cdc_req_type;
@@ -562,7 +752,9 @@ module uart_mem_agent_2clk
                             tx_total <= 5'd10;
                         end
 
-                        uart_state <= ST_BUILD_XOR;
+                        tx_idx         <= 5'd0;
+                        txexpectresp <= 1'b1;
+                        uart_state     <= ST_BUILD_XOR;
                     end
                 end
 
@@ -582,7 +774,11 @@ module uart_mem_agent_2clk
                             rx_state    <= RX_SOF;
                             rx_pl_idx   <= 8'd0;
                             rx_xor_acc  <= 8'd0;
-                            uart_state  <= ST_WAIT_RESP;
+
+                            if (txexpectresp)
+                                uart_state <= ST_WAIT_RESP;
+                            else
+                                uart_state <= ST_IDLE;
                         end else begin
                             tx_idx <= tx_idx + 1'b1;
                         end
@@ -603,6 +799,9 @@ module uart_mem_agent_2clk
 
                         resp_toggle_uart <= ~resp_toggle_uart;
                         uart_state       <= ST_IDLE;
+                        rx_state         <= RX_SOF;
+                        rx_pl_idx        <= 8'd0;
+                        rx_xor_acc       <= 8'd0;
 
                     end else if (rx_valid) begin
                         case (rx_state)
@@ -660,6 +859,9 @@ module uart_mem_agent_2clk
                                         cdc_resp_data    <= resp_data;
                                         resp_toggle_uart <= ~resp_toggle_uart;
                                         uart_state       <= ST_IDLE;
+                                        rx_state         <= RX_SOF;
+                                        rx_pl_idx        <= 8'd0;
+                                        rx_xor_acc       <= 8'd0;
 
                                     end else if ((req_type_uart == `UA_TYPE_WRITE) &&
                                                  (rx_len == `UA_PLEN_WRITE_RESP)) begin
@@ -667,6 +869,9 @@ module uart_mem_agent_2clk
                                         cdc_resp_data    <= 32'd0;
                                         resp_toggle_uart <= ~resp_toggle_uart;
                                         uart_state       <= ST_IDLE;
+                                        rx_state         <= RX_SOF;
+                                        rx_pl_idx        <= 8'd0;
+                                        rx_xor_acc       <= 8'd0;
 
                                     end else begin
                                         rx_state <= RX_SOF;

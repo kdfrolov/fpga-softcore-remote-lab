@@ -1,6 +1,4 @@
-"""
-MockByteStream — in-memory stream for unit testing without a real UART.
-"""
+"""Small mock byte stream for protocol testing."""
 
 from __future__ import annotations
 
@@ -8,25 +6,22 @@ from collections import deque
 
 
 class MockByteStream:
-    def __init__(self, rx: bytes = b"") -> None:
-        self._rx: deque[int] = deque(rx)
-        self._tx = bytearray()
+    def __init__(self) -> None:
+        self.rx = deque()
+        self.tx = bytearray()
 
     def read_byte(self) -> int:
-        if not self._rx:
-            raise RuntimeError("MockByteStream RX buffer empty")
-        return self._rx.popleft()
+        if not self.rx:
+            raise TimeoutError("Mock stream timeout")
+        return self.rx.popleft()
 
     def write_bytes(self, data: bytes) -> None:
-        self._tx.extend(data)
+        self.tx.extend(data)
 
     def push_rx(self, data: bytes) -> None:
-        self._rx.extend(data)
+        self.rx.extend(data)
 
-    def take_tx(self) -> bytes:
-        data = bytes(self._tx)
-        self._tx.clear()
+    def pop_tx(self) -> bytes:
+        data = bytes(self.tx)
+        self.tx.clear()
         return data
-
-    def rx_empty(self) -> bool:
-        return len(self._rx) == 0

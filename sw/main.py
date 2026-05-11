@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """
-Entry point for two modes:
+Entry point for the desktop FPGA PC-side tools.
 
-1) GUI mode (default):
-   python main.py
-   python main.py gui
-
-2) Headless UART memory-agent mode:
-   python main.py serve --port COM3 --baud 115200 --hex data/program.hex
+Modes:
+- GUI (default): python main.py
+- Headless memory-agent: python main.py serve --port COM3 --baud 115200 --hex program.hex
 """
 
 from __future__ import annotations
@@ -32,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser("serve", help="Run UART memory agent without GUI")
     serve.add_argument("--port", required=True, help="Serial port (e.g. COM3 or /dev/ttyUSB0)")
-    serve.add_argument("--baud", type=int, default=115200, help="Baud rate (default: 115200)")
+    serve.add_argument("--baud", type=int, default=115200, help="Baud rate")
     serve.add_argument("--mem", type=int, default=4096 * 4, help="Memory size in bytes")
     serve.add_argument("--hex", default=None, help="Plain hex word file to preload")
     serve.add_argument("--quiet", action="store_true", help="Suppress per-frame log output")

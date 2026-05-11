@@ -1,7 +1,4 @@
-"""
-SerialByteStream — wraps pyserial into the ByteStream interface required
-by UartMemoryAgent.
-"""
+"""SerialByteStream wrapper over pyserial."""
 
 from __future__ import annotations
 
@@ -11,17 +8,13 @@ import serial
 from serial.tools import list_ports
 
 
+
 def list_serial_ports() -> List[str]:
     return [port.device for port in list_ports.comports()]
 
 
 class SerialByteStream:
-    def __init__(
-        self,
-        port: str,
-        baud: int = 115200,
-        timeout: float = 0.2,
-    ) -> None:
+    def __init__(self, port: str, baud: int = 115200, timeout: float = 0.2) -> None:
         self._ser = serial.Serial(
             port=port,
             baudrate=baud,
@@ -30,7 +23,6 @@ class SerialByteStream:
             stopbits=serial.STOPBITS_ONE,
             timeout=timeout,
         )
-
         if not self._ser.is_open:
             self._ser.open()
 
