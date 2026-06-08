@@ -1,4 +1,4 @@
-"""Integration tests: Agent + MemoryModel + MockByteStream."""
+"""Integration tests: Agent + MemoryModel + MockByteStream"""
 
 from app.agent import UartMemoryAgent
 from app.memory_model import MemoryModel

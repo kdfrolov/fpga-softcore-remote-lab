@@ -1,6 +1,3 @@
-/*
-
- */ 
 
 //lab hardware top level module
 module lab_top
@@ -14,9 +11,7 @@ module lab_top
     input           uart_rxd_i,
     output          uart_txd_o
 );
-    // ============================================================
     // UART-controlled core config
-    // ============================================================
     wire [3:0] uart_clk_div;
     wire       uart_hold;
     wire       uart_core_reset_pulse;
@@ -36,10 +31,7 @@ module lab_top
             core_reset_cnt <= core_reset_cnt - 1'b1;
     end
 
-    // ============================================================
     // Clock divider
-    // We keep clock running all the time; run/stop is done via hold.
-    // ============================================================
     sm_clk_divider sm_clk_divider
     (
         .clkIn      ( clkIn        ),
@@ -49,18 +41,15 @@ module lab_top
         .clkOut     ( clk          )
     );
 
-    // ============================================================
     // CPU <-> I-cache
-    // ============================================================
     wire [31:0] imAddr;
     wire        imValid;
     wire        imReady;
     wire        imRvalid;
     wire [31:0] imData;
 
-    // ============================================================
-    // I-cache back-end
-    // ============================================================
+
+    // I-cache backend
     wire        ic_be_valid;
     wire [23:0] ic_be_addr;
     wire [31:0] ic_be_wdata;
@@ -69,9 +58,7 @@ module lab_top
     wire        ic_be_rvalid;
     wire [31:0] ic_be_rdata;
 
-    // ============================================================
     // Instruction cache
-    // ============================================================
     iob_cache_iob u_icache (
         .clk_i           ( clk             ),
         .cke_i           ( 1'b1            ),
@@ -99,9 +86,7 @@ module lab_top
         .be_iob_ready_i  ( ic_be_ready     )
     );
 
-    // ============================================================
     // CPU <-> D-cache
-    // ============================================================
     wire [31:0] dmAddr;
     wire [31:0] dmDataW;
     wire [ 3:0] dmWstrb;
@@ -110,9 +95,7 @@ module lab_top
     wire        dmRvalid;
     wire [31:0] dmDataR;
 
-    // ============================================================
     // D-cache back-end
-    // ============================================================
     wire        dc_be_valid;
     wire [23:0] dc_be_addr;
     wire [31:0] dc_be_wdata;
@@ -121,9 +104,7 @@ module lab_top
     wire        dc_be_rvalid;
     wire [31:0] dc_be_rdata;
 
-    // ============================================================
-    // Data cache
-    // ============================================================
+    // D-cache
     iob_cache_iob u_dcache (
         .clk_i           ( clk             ),
         .cke_i           ( 1'b1            ),
@@ -151,9 +132,7 @@ module lab_top
         .be_iob_ready_i  ( dc_be_ready     )
     );
 
-    // ============================================================
     // UART memory + control agent
-    // ============================================================
     wire [2:0] dbg_uart_state;
     wire [3:0] dbg_rx_state;
     wire       dbg_core_busy;
@@ -195,9 +174,7 @@ module lab_top
         .dbg_core_busy_o       ( dbg_core_busy      )
     );
 
-    // ============================================================
     // CPU
-    // ============================================================
     sr_cpu sm_cpu (
         .clk        ( clk            ),
         .rst_n      ( core_rst_n     ),
@@ -222,12 +199,7 @@ module lab_top
 
 endmodule
 
-// ================================================================
-// Simple ROM backend for instruction cache
-// - accepts only read requests
-// - returns data one cycle after request accept
-// - ROM content is loaded from HEX_FILE via $readmemh
-// ================================================================
+// Test ROM backend for I-cache
 module lab_icache_rom_backend
 #(
     parameter HEX_FILE  = "program.hex",
@@ -276,7 +248,7 @@ module lab_icache_rom_backend
 
 endmodule
 
-//metastability input debouncer module
+//debouncer module
 module sm_debouncer
 #(
     parameter SIZE = 1
@@ -295,7 +267,7 @@ module sm_debouncer
 
 endmodule
 
-//tunable clock divider
+//clock divider
 module sm_clk_divider
 #(
     parameter shift  = 16,
@@ -317,14 +289,7 @@ module sm_clk_divider
 endmodule
 
 
-// ================================================================
-// Simple RAM backend for data cache
-// - accepts read and write requests
-// - ready is always 1
-// - writes happen on accepted write request
-// - reads return data one cycle after accepted read request
-// - byte write enables are supported through wstrb_i
-// ================================================================
+// Test RAM backend for D-cache
 module lab_dcache_ram_backend
 #(
     parameter HEX_FILE  = "",

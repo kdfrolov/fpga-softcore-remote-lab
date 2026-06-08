@@ -8,16 +8,12 @@ module uart_mem_agent_2clk
 )(
     input             rst_n,
 
-    // -----------------------------
     // Stable UART clock domain
-    // -----------------------------
     input             uart_clk,
     output            uart_txd_o,
     input             uart_rxd_i,
 
-    // -----------------------------
     // Variable core clock domain
-    // -----------------------------
     input             core_clk,
 
     // I-side request channel (core domain)
@@ -48,9 +44,7 @@ module uart_mem_agent_2clk
     output            dbg_core_busy_o
 );
 
-    // ==========================================================
     // Core-domain request context
-    // ==========================================================
     reg        core_busy;
 
     reg [7:0]  cdc_req_type;
@@ -75,11 +69,6 @@ module uart_mem_agent_2clk
     reg [31:0] pend_req_wdata;
     reg [3:0]  pend_req_wstrb;
 
-    // ----------------------------------------------------------
-    // NEW: "accepted once" tracking for level-valid sources
-    // Prevent the same still-asserted request from being
-    // accepted multiple times.
-    // ----------------------------------------------------------
     reg        dc_seen_valid;
     reg [31:0] dc_seen_addr;
     reg [31:0] dc_seen_wdata;
@@ -103,33 +92,22 @@ module uart_mem_agent_2clk
         ic_seen_valid &&
         (ic_addr_i == ic_seen_addr);
 
-    // ==========================================================
     // UART-domain CDC response bundle
-    // ==========================================================
     reg [7:0]  cdc_resp_status;
     reg [31:0] cdc_resp_data;
     reg        resp_toggle_uart;
 
-    // ==========================================================
     // Toggle synchronizers
-    // ==========================================================
     reg req_sync1_uart,  req_sync2_uart,  req_seen_uart;
     reg resp_sync1_core, resp_sync2_core, resp_seen_core;
 
     assign dbg_core_busy_o = core_busy;
 
-    // ==========================================================
     // Core-side ready
-    // Allow one in-flight request plus one queued request,
-    // but do not re-accept the exact same still-held request.
-    // D-side keeps priority over I-side.
-    // ==========================================================
     assign dc_ready_o = !pend_valid && !dc_same_seen;
     assign ic_ready_o = !pend_valid && !dc_valid_i && !ic_same_seen;
 
-    // ==========================================================
     // Core domain logic
-    // ==========================================================
     always @(posedge core_clk or negedge rst_n) begin
         if (!rst_n) begin
             core_busy         <= 1'b0;
@@ -177,8 +155,6 @@ module uart_mem_agent_2clk
             resp_sync1_core <= resp_toggle_uart;
             resp_sync2_core <= resp_sync1_core;
 
-            // Release "seen" when valid drops, or when payload changes
-            // while valid stays high (back-to-back request case).
             if (!dc_valid_i) begin
                 dc_seen_valid <= 1'b0;
             end else if (dc_seen_valid &&
@@ -195,11 +171,7 @@ module uart_mem_agent_2clk
                 ic_seen_valid <= 1'b0;
             end
 
-            // ------------------------------------------
             // Response arrival from UART domain
-            // Retire active request and, if possible,
-            // immediately launch the next one.
-            // ------------------------------------------
             if (resp_sync2_core != resp_seen_core) begin
                 resp_seen_core <= resp_sync2_core;
 
@@ -289,9 +261,6 @@ module uart_mem_agent_2clk
                     core_busy <= 1'b0;
                 end
 
-            // ------------------------------------------
-            // No response this cycle
-            // ------------------------------------------
             end else begin
                 if (!core_busy) begin
                     // Idle: launch directly
@@ -369,9 +338,7 @@ module uart_mem_agent_2clk
         end
     end
 
-    // ==========================================================
     // UART TX/RX
-    // ==========================================================
     reg        tx_valid;
     reg [7:0]  tx_data;
     wire       tx_ready;
@@ -404,9 +371,7 @@ module uart_mem_agent_2clk
         .valid_o (rx_valid)
     );
 
-    // ==========================================================
     // UART domain state
-    // ==========================================================
     localparam [2:0]
         ST_IDLE      = 3'd0,
         ST_BUILD_XOR = 3'd1,
@@ -475,9 +440,7 @@ module uart_mem_agent_2clk
         end
     end
 
-    // ==========================================================
     // UART domain FSM
-    // ==========================================================
     always @(posedge uart_clk or negedge rst_n) begin
         if (!rst_n) begin
             req_sync1_uart <= 1'b0;
@@ -542,9 +505,7 @@ module uart_mem_agent_2clk
                 ST_IDLE: begin
                     timeout_cnt <= 32'd0;
 
-                    // --------------------------------------------------
                     // 1) Incoming control frames from PC while idle
-                    // --------------------------------------------------
                     if (rx_valid) begin
                         case (rx_state)
                             RX_SOF: begin
@@ -597,11 +558,9 @@ module uart_mem_agent_2clk
                                 if (rx_xor_acc == rx_byte) begin
                                     case (rx_type)
 
-                                        // ----------------------------------
                                         // SET CLK DIV
                                         // payload: [div]
                                         // resp: [status][div]
-                                        // ----------------------------------
                                         `UA_TYPE_SET_CLKDIV_REQ: begin
                                             txbuf[0] <= `UA_SOF;
                                             txbuf[1] <= `UA_TYPE_SET_CLKDIV_RESP;
@@ -623,11 +582,9 @@ module uart_mem_agent_2clk
                                             uart_state     <= ST_BUILD_XOR;
                                         end
 
-                                        // ----------------------------------
                                         // SET HOLD
                                         // payload: [hold]
                                         // resp: [status][hold]
-                                        // ----------------------------------
                                         `UA_TYPE_SET_HOLD_REQ: begin
                                             txbuf[0] <= `UA_SOF;
                                             txbuf[1] <= `UA_TYPE_SET_HOLD_RESP;
@@ -649,12 +606,10 @@ module uart_mem_agent_2clk
                                             uart_state     <= ST_BUILD_XOR;
                                         end
 
-                                        // ----------------------------------
                                         // CORE RESET
                                         // payload: none
                                         // resp: [status]
                                         // reset also forces hold=1
-                                        // ----------------------------------
                                         `UA_TYPE_CORE_RESET_REQ: begin
                                             txbuf[0] <= `UA_SOF;
                                             txbuf[1] <= `UA_TYPE_CORE_RESET_RESP;
@@ -675,12 +630,10 @@ module uart_mem_agent_2clk
                                             uart_state     <= ST_BUILD_XOR;
                                         end
 
-                                        // ----------------------------------
                                         // SET REGSEL
                                         // payload: [regsel]
                                         // resp: [status][regsel]
                                         // 0 => PC, 1..31 => x1..x31
-                                        // ----------------------------------
                                         `UA_TYPE_SET_REGSEL_REQ: begin
                                             txbuf[0] <= `UA_SOF;
                                             txbuf[1] <= `UA_TYPE_SET_REGSEL_RESP;
@@ -714,9 +667,7 @@ module uart_mem_agent_2clk
                             end
                         endcase
 
-                    // --------------------------------------------------
                     // 2) Existing memory request launch from core side
-                    // --------------------------------------------------
                     end else if (req_sync2_uart != req_seen_uart) begin
                         req_seen_uart <= req_sync2_uart;
 

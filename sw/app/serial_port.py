@@ -1,4 +1,4 @@
-"""SerialByteStream wrapper over pyserial."""
+"""SerialByteStream wrapper over pyserial"""
 
 from __future__ import annotations
 

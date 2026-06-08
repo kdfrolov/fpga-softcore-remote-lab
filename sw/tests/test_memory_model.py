@@ -1,4 +1,4 @@
-"""Tests for app.memory_model."""
+"""Tests for memory_model"""
 
 import pytest
 from app.memory_model import MemoryModel, MemoryRangeError

@@ -1,4 +1,4 @@
-"""UART memory agent with bidirectional control-command support."""
+"""UART memory agent with bidirectional control-command support"""
 
 from __future__ import annotations
 

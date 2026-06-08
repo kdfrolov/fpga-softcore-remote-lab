@@ -1,4 +1,4 @@
-"""Byte-addressable little-endian 32-bit memory model."""
+"""Byte-addressable little-endian 32-bit memory model"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Small mock byte stream for protocol testing."""
+"""Small mock byte stream for protocol testing"""
 
 from __future__ import annotations
 

@@ -2,7 +2,7 @@
 Python-side implementation of the UART memory/control protocol.
 
 Frame layout:
-[SOF=0xA5][TYPE][SEQ][LEN][PAYLOAD x LEN][XOR]
+[SOF=0xA5][TYPE][SEQ][LEN][PAYLOAD][XOR]
 """
 
 from __future__ import annotations

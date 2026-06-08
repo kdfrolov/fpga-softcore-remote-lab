@@ -1,4 +1,4 @@
-"""Tests for app.protocol — frame encoding, decoding, builders."""
+"""Tests for protocol - frame encoding, decoding, builders"""
 
 import pytest
 from app.protocol import (
