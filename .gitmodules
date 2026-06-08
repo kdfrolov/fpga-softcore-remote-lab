@@ -1,0 +1,3 @@
+[submodule "cores_submodules/schoolRISCV"]
+	path = cores_submodules/schoolRISCV
+	url = https://github.com/kdfrolov/schoolRISCV.git
